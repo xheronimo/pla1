@@ -1,0 +1,4 @@
+#include "alarm_destination.h"
+
+AlarmDestination alarmDestinations[10];
+size_t alarmDestinationCount = 0;
