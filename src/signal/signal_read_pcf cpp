@@ -1,0 +1,5 @@
+#include "signal_read_pcf.h"
+#include "i2c/pcf8574_driver.h"
+
+
+bool readSignalPCF(const Signal& s, float& out){return leerSignalPCF_System(s, out); // stub}
