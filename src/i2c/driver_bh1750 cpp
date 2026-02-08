@@ -1,0 +1,33 @@
+#include "driver_bh1750.h"
+#include "signal/signal_reader.h"
+#include "Wire.h"
+
+static bool bh1750ReadLux(uint8_t addr, float& lux)
+{
+    // Power ON
+    Wire.beginTransmission(addr);
+    Wire.write(BH1750_POWER_ON);
+    if (Wire.endTransmission() != 0)
+        return false;
+
+    delay(10);
+
+    // Start continuous measurement
+    Wire.beginTransmission(addr);
+    Wire.write(BH1750_CONT_HIGH_RES);
+    if (Wire.endTransmission() != 0)
+        return false;
+
+    delay(180); // tiempo típico de conversión
+
+    Wire.requestFrom(addr, (uint8_t)2);
+    if (Wire.available() < 2)
+        return false;
+
+    uint16_t raw = (Wire.read() << 8) | Wire.read();
+
+    // Conversión datasheet
+    lux = raw / 1.2f;
+
+    return true;
+}
