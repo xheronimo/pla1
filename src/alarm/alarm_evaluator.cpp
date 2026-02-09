@@ -17,6 +17,9 @@ static bool evalCond(const AlarmExpr &e)
     bool error = false;
     signalManagerGetErrorById(e.signalId, error);
 
+    if (!hasValue || error)
+        return false;   // ⛔ SAFE → no dispara
+
     Signal *s = signalManagerGet(e.signalId);
     float prev = s ? s->prev : 0.0f;
 

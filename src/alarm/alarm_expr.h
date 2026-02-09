@@ -37,5 +37,6 @@ struct AlarmExpr
 
     // --- Si type == NOT ---
     AlarmExpr* child;
+    
 };
 

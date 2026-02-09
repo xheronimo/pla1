@@ -48,6 +48,14 @@ void signalManagerPollAll()
     {
         Signal &sig = signalTable[i];
 
+        ChipContext* cc = i2cGetChipContext(sig.bus, sig.chip, sig.address);
+        if (cc && cc->state == ChipState::ERROR)
+        {
+            sig.error = true;
+            sig.valid = false;   // 👈 opcional
+            continue;
+        }
+
         float v = 0.0f;
 
         // -----------------------------
@@ -56,10 +64,23 @@ void signalManagerPollAll()
         if (!leerSignal(sig, v))
         {
             sig.error = true;
-            continue;
+ 
+            sig.errorCount++;
+  
+            // watchdog por señal
+
+            if (sig.errorCount >= 5) {
+
+                sig.valid = false;
+
+            }
+    
+            continue;   // ⛔ no tocar valores
         }
 
         sig.error = false;
+        sig.errorCount = 0;
+        sig.valid = true;
 
         // -----------------------------
         // Invertido (solo digital)

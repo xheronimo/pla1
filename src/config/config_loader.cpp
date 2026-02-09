@@ -147,9 +147,6 @@ bool cargarConfiguracion(Configuracion& cfg, SystemMode mode)
     cargarConfigPorDefecto(cfg);
     return false;
 }
-
-
-
-// ----------------------------
+---------------------------
     
    
