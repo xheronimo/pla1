@@ -1,33 +1,207 @@
-#include "driver_bh1750.h"
-#include "signal/signal_reader.h"
-#include "Wire.h"
+#include "i2c/bh1750_driver.h"
+#include <Wire.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 
-static bool bh1750ReadLux(uint8_t addr, float& lux)
+// ==============================
+// COMANDOS BH1750
+// ==============================
+#define BH1750_POWER_ON      0x01
+#define BH1750_RESET         0x07
+#define BH1750_CONT_HIRES    0x10
+#define BH1750_CONT_HIRES2   0x11
+#define BH1750_CONT_LORES    0x13
+
+// ==============================
+// CACHE
+// ==============================
+struct Bh1750Cache {
+    bool     valid = false;
+    float    lux   = 0.0f;
+    uint32_t lastReadMs = 0;
+};
+
+static Bh1750Cache cache[BH1750_MAX_CHIPS];
+static ChipContext ctx[BH1750_MAX_CHIPS];
+
+// ==============================
+// MUTEX I2C
+// ==============================
+static SemaphoreHandle_t i2cMutex = nullptr;
+
+static void ensureMutex()
 {
-    // Power ON
+    if (!i2cMutex)
+        i2cMutex = xSemaphoreCreateMutex();
+}
+
+// ==============================
+// LOW LEVEL
+// ==============================
+static bool bh1750WriteCmd(uint8_t addr, uint8_t cmd)
+{
     Wire.beginTransmission(addr);
-    Wire.write(BH1750_POWER_ON);
-    if (Wire.endTransmission() != 0)
+    Wire.write(cmd);
+    return Wire.endTransmission() == 0;
+}
+
+static bool bh1750Read(uint8_t addr, uint16_t& raw)
+{
+    if (Wire.requestFrom(addr, (uint8_t)2) != 2)
         return false;
 
-    delay(10);
+    raw = (Wire.read() << 8) | Wire.read();
+    return true;
+}
 
-    // Start continuous measurement
-    Wire.beginTransmission(addr);
-    Wire.write(BH1750_CONT_HIGH_RES);
-    if (Wire.endTransmission() != 0)
+static uint8_t modeToCmd(Bh1750Mode m)
+{
+    switch (m) {
+        case Bh1750Mode::CONT_HIGH_RES2: return BH1750_CONT_HIRES2;
+        case Bh1750Mode::CONT_LOW_RES:   return BH1750_CONT_LORES;
+        default:                         return BH1750_CONT_HIRES;
+    }
+}
+
+// ==============================
+// INIT
+// ==============================
+bool bh1750Init(uint8_t addr, Bh1750Mode mode)
+{
+    ensureMutex();
+
+    uint8_t idx = addr & 0x07;
+    ChipContext& c = ctx[idx];
+
+    if (xSemaphoreTake(i2cMutex, pdMS_TO_TICKS(50)) != pdTRUE)
         return false;
 
-    delay(180); // tiempo típico de conversión
+    c.state      = ChipState::INITIALIZING;
+    c.initTs     = millis();
+    c.warmupMs   = 180;     // datasheet ~120ms
+    c.retryMs    = 1000;
+    c.errorCount = 0;
+    c.consecutiveErrors = 0;
 
-    Wire.requestFrom(addr, (uint8_t)2);
-    if (Wire.available() < 2)
+    if (!bh1750WriteCmd(addr, BH1750_POWER_ON) ||
+        !bh1750WriteCmd(addr, BH1750_RESET) ||
+        !bh1750WriteCmd(addr, modeToCmd(mode)))
+    {
+        c.state = ChipState::ERROR;
+        xSemaphoreGive(i2cMutex);
         return false;
+    }
 
-    uint16_t raw = (Wire.read() << 8) | Wire.read();
+    c.state = ChipState::WARMUP;
+    xSemaphoreGive(i2cMutex);
+    return true;
+}
+
+// ==============================
+// READ
+// ==============================
+static bool bh1750ReadLux(uint8_t addr, Bh1750Cache& c)
+{
+    uint16_t raw;
+    if (!bh1750Read(addr, raw))
+        return false;
 
     // Conversión datasheet
-    lux = raw / 1.2f;
-
+    c.lux = raw / 1.2f;
+    c.valid = true;
+    c.lastReadMs = millis();
     return true;
+}
+
+// ==============================
+// API PRINCIPAL
+// ==============================
+bool leerSignalBH1750(const Signal& s, float& out)
+{
+    ensureMutex();
+
+    uint8_t idx = s.address & 0x07;
+    ChipContext& cc = ctx[idx];
+    Bh1750Cache& bc = cache[idx];
+    uint32_t now = millis();
+
+    // -----------------------------
+    // SAFE
+    // -----------------------------
+    if (cc.state == ChipState::ERROR) {
+        if (now - cc.lastReadTs > cc.retryMs) {
+            cc.state = ChipState::UNINITIALIZED;
+            cc.consecutiveErrors = 0;
+        }
+        return false;
+    }
+
+    // -----------------------------
+    // INIT
+    // -----------------------------
+    if (cc.state == ChipState::UNINITIALIZED)
+    {
+        Bh1750Mode mode =
+            (Bh1750Mode)(s.options & 0x03);
+
+        if (!bh1750Init(s.address, mode)) {
+            cc.consecutiveErrors++;
+            cc.errorCount++;
+            if (cc.consecutiveErrors >= 5)
+                cc.state = ChipState::ERROR;
+            return false;
+        }
+        return false;
+    }
+
+    // -----------------------------
+    // WARMUP
+    // -----------------------------
+    if (cc.state == ChipState::WARMUP)
+    {
+        if (now - cc.initTs < cc.warmupMs)
+            return false;
+        cc.state = ChipState::READY;
+    }
+
+    if (cc.state != ChipState::READY)
+        return false;
+
+    // -----------------------------
+    // CACHE
+    // -----------------------------
+    if (!bc.valid || now - bc.lastReadMs > BH1750_CACHE_MS)
+    {
+        if (xSemaphoreTake(i2cMutex, pdMS_TO_TICKS(50)) != pdTRUE)
+            return false;
+
+        bool ok = bh1750ReadLux(s.address, bc);
+
+        xSemaphoreGive(i2cMutex);
+
+        if (!ok) {
+            cc.consecutiveErrors++;
+            cc.errorCount++;
+            if (cc.consecutiveErrors >= 5)
+                cc.state = ChipState::ERROR;
+            return false;
+        }
+
+        cc.consecutiveErrors = 0;
+        cc.lastReadTs = now;
+    }
+
+    out = bc.lux;
+    return true;
+}
+
+// ==============================
+// RESET
+// ==============================
+void bh1750Reset()
+{
+    for (uint8_t i = 0; i < BH1750_MAX_CHIPS; i++) {
+        cache[i] = {};
+        ctx[i]   = {};
+    }
 }

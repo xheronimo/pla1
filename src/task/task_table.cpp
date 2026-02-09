@@ -42,6 +42,26 @@ void arrancarTareasSistema(const Configuracion& cfg)
         );
     }
 
+     xTaskCreatePinnedToCore(
+        taskSignalPolling,
+        "SignalPoll",
+        4096,
+        nullptr,
+        5,
+        nullptr,
+        1
+    );
+
+    xTaskCreatePinnedToCore(
+        taskI2CRecovery,
+        "I2CRecovery",
+        3072,
+        nullptr,
+        2,          // prioridad baja
+        nullptr,
+        1
+    );
+    
     // ======================
     // DISPATCHER DE ALARMAS
     // ======================

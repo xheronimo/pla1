@@ -1,28 +1,31 @@
 #pragma once
 
-#include <stdint.h>
-#include <Arduino.h>
 #include "signal/signal_struct.h"
+#include "i2c/i2c_chip_context.h"
 
 // ==============================
 // CONFIG
 // ==============================
 #define BME280_MAX_CHIPS   8
-#define BME280_CACHE_MS   1000   // BME no necesita refresco rápido
+#define BME280_CACHE_MS   1000
 
 // ==============================
-// CACHE
+// CANALES
 // ==============================
-struct Bme280Cache {
-    bool     valid;
-    uint32_t lastReadMs;
-    float    temperature;  // °C
-    float    humidity;     // %
-    float    pressure;     // hPa
-};
+// channel:
+// 0 → Temperatura (°C)
+// 1 → Humedad (%)
+// 2 → Presión (hPa)
 
 // ==============================
-// API
+// OPCIONES (Signal.options)
 // ==============================
-void bme280ResetCaches();
+// bits 0..1 → oversampling
+// 0 = x1
+// 1 = x2
+// 2 = x4
+// 3 = x8
+// ==============================
+bool bme280Init(uint8_t addr, uint8_t options = 0);
 bool leerSignalBME280(const Signal& s, float& out);
+void bme280Reset();
