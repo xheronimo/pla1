@@ -1,80 +1,39 @@
 #include "alarm_persistence.h"
-#include "alarm_registry.h"
+
+#include "system/nvs_store.h"
 #include "alarm_runtime.h"
+#include "alarm_struct.h"
+#include "alarm_registry.h"
 
-#define MAX_PERSISTED_ALARMS 16
 
-// ⚠️ Implementación temporal en RAM
-// En el futuro esto se sustituye por NVS / Flash
-static PersistedAlarm table[MAX_PERSISTED_ALARMS];
-static uint8_t count = 0;
 
-// --------------------------------------------------
-// Cargar (stub por ahora)
-// --------------------------------------------------
-void alarmPersistenceLoad()
-{
-    count = 0;
-    // FUTURO:
-    // - Abrir NVS
-    // - Leer lista de alarmas
-    // - Rellenar table[]
-}
-
-// --------------------------------------------------
-// Guardar estado de una alarma
-// --------------------------------------------------
 void alarmPersistenceSave(uint32_t alarmId, bool active, bool acked)
 {
-    for (uint8_t i = 0; i < count; i++)
-    {
-        if (table[i].alarmId == alarmId)
-        {
-            table[i].active = active;
-            table[i].acked = acked;
-            return;
-        }
-    }
+    auto& nvs = NVS::alarms();
 
-    if (count < MAX_PERSISTED_ALARMS)
-    {
-        table[count].alarmId = alarmId;
-        table[count].active = active;
-        table[count].acked = acked;
-        count++;
-    }
-    // FUTURO:
-    // - Guardar inmediatamente en NVS
+    char key[32];
+    snprintf(key, sizeof(key), "ack_%lu", alarmId);
+
+    nvs.putBool(key, acked);
 }
 
-// --------------------------------------------------
-// Obtener estado persistido
-// --------------------------------------------------
-bool alarmPersistenceGet(uint32_t alarmId, bool &active, bool &acked)
+void alarmPersistenceLoadAll()
 {
-    for (uint8_t i = 0; i < count; i++)
-    {
-        if (table[i].alarmId == alarmId)
-        {
-            active = table[i].active;
-            acked = table[i].acked;
-            return true;
-        }
-    }
-    return false;
-}
+    auto& nvs = NVS::alarms();
 
-void restoreAlarmRuntimeFromPersistence()
-{
-    size_t count = 0;
-    const AlarmRule *rules = alarmRegistryAll(count);
+    size_t count;
+    const AlarmRule* rules = alarmRegistryAll(count);
 
     for (size_t i = 0; i < count; i++)
     {
-        bool active, acked;
-        if (alarmPersistenceGet(rules[i].alarmId, active, acked))
-        {
-            alarmRuntimeRestore(rules[i].alarmId, active, acked);
-        }
+        const AlarmRule& r = rules[i];
+
+        char key[32];
+        snprintf(key, sizeof(key), "ack_%lu", r.alarmId);
+
+        bool acked = nvs.getBool(key, false);
+
+        // 🔁 RESTORE aquí
+        alarmRuntimeRestore(r.alarmId, false, acked);
     }
 }

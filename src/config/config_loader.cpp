@@ -54,6 +54,7 @@ bool loadConfigFromJson(
     if (root.containsKey("signals"))
     {
         if (!loadSignalsFromJson(
+            
                 root["signals"].as<JsonArrayConst>()))
         {
             escribirLog("CFG:ERR:SIGNALS");
@@ -147,6 +148,5 @@ bool cargarConfiguracion(Configuracion& cfg, SystemMode mode)
     cargarConfigPorDefecto(cfg);
     return false;
 }
----------------------------
-    
+
    

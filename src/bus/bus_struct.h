@@ -17,5 +17,6 @@ enum class BusType : uint8_t {
 // ==============================
 enum class SignalKind {
     SENSOR_DIGITAL,
-    SENSOR_ANALOG
+    SENSOR_ANALOG,
+    ACTUATOR_DIGITAL
 };

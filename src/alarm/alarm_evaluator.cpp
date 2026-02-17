@@ -6,6 +6,34 @@
 #include "signal/signal_manager.h"
 #include "alarm_registry.h"
 
+static const Signal *getSignalFromExpr(const AlarmExpr *e)
+{
+    if (!e)
+        return nullptr;
+
+    if (e->type == AlarmExprType::EXPR_COND)
+        return signalManagerGet(e->signalId);
+
+    if (e->left)
+    {
+        const Signal *s = getSignalFromExpr(e->left);
+        if (s)
+            return s;
+    }
+
+    if (e->right)
+    {
+        const Signal *s = getSignalFromExpr(e->right);
+        if (s)
+            return s;
+    }
+
+    if (e->child)
+        return getSignalFromExpr(e->child);
+
+    return nullptr;
+}
+
 // --------------------------------------------------
 // Evaluar condición hoja (COND)
 // --------------------------------------------------
@@ -18,9 +46,14 @@ static bool evalCond(const AlarmExpr &e)
     signalManagerGetErrorById(e.signalId, error);
 
     if (!hasValue || error)
-        return false;   // ⛔ SAFE → no dispara
+        return false; // ⛔ SAFE → no dispara
 
     Signal *s = signalManagerGet(e.signalId);
+
+    // ⛔ señal no válida → bloquear alarma
+
+    if (!s || !s->valid || error)
+        return false;
     float prev = s ? s->prev : 0.0f;
 
     bool now = (value != 0.0f);
@@ -98,6 +131,41 @@ void alarmEvaluate()
     for (size_t i = 0; i < count; i++)
     {
         const AlarmRule &r = rules[i];
+
+        // ⛔ BLOQUEADA → no se evalúa
+        if (alarmRuntimeIsBlocked(r.alarmId))
+            continue;
+
+        // -----------------------------------
+        // 🛑 BLOQUEO POR CALIDAD DE SEÑAL
+        // -----------------------------------
+        const Signal *s = getSignalFromExpr(r.expr);
+
+        // ⛔ Política SAFE: señal mala → alarma bloqueada
+        if (!s || s->quality != SignalQuality::GOOD)
+        {
+            alarmRuntimeSetBlocked(r.alarmId, true);
+            continue;
+        }
+        else
+        {
+            alarmRuntimeSetBlocked(r.alarmId, false);
+        }
+
+        AlarmRuntime *rt = alarmRuntimeGet(r.alarmId);
+        if (!rt)
+            continue;
+
+        if (!s || !s->valid || s->error)
+        {
+            rt->blocked = true;
+            rt->active = false;
+            continue; // ⛔ NO evaluar alarma
+        }
+        else
+        {
+            rt->blocked = false;
+        }
 
         bool conditionActive = evalExpr(*r.expr);
 

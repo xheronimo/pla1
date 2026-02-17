@@ -8,6 +8,7 @@ struct AlarmRuntime
     uint32_t alarmId;
     bool active;
     bool acked;
+    bool blocked;
 };
 
 // --- API ---
@@ -30,3 +31,6 @@ void alarmRuntimeAck(uint32_t alarmId);
 
 const AlarmRuntime* alarmRuntimeAll(size_t& outCount);
 void alarmRuntimeClearAll();
+
+void alarmRuntimeSetBlocked(uint32_t alarmId, bool blocked);
+bool alarmRuntimeIsBlocked(uint32_t alarmId);

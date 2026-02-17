@@ -99,6 +99,8 @@ struct Configuracion {
     bool enableWeb;
     bool enableSms;
     bool enableTelegram;
+    bool enableDisplay;
+    
     SystemMode systemMode;
 };
 
