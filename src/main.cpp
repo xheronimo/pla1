@@ -1,69 +1,120 @@
 #include <Arduino.h>
-
-#include "system/system_sync.h"
-#include "system/WatchdogManager.h"
+#include "system/boot_reason.h"
 #include "system/LogSystem.h"
-
-#include "config/config_loader.h"
+#include "system/nvs_store.h"
+#include "system/system_fault.h"
+#include "system/fault_output.h"
 #include "system/hardware_init.h"
-#include "task/task_table.h"
-#include "config/config_global.h"
+
+#include "signal/signal_manager.h"
+#include "signal/signal_persist.h"
+#include "signal/system_signals.h"
+
+#include "alarm/alarm_registry.h"
 #include "alarm/alarm_persistence.h"
-#include "alarm/alarm_config.h"
-#include "alarm/alarm_runtime.h"
-#include "system/system_boot.h"
-#include "config/config_defaults.h"
-#include "alarm/alarm_runtime.h"
-#include "task/task_load.h"
+
+#include "Display/DisplaySSD1306.h"
+#include "web/web_manager.h"
+#include "config/config_loader.h"
+#include "config/config_apply.h"
+
+#include "signal/board_fixed_signals.h"
+#include "system/fault_output.h"
+#include "system/system_fault.h"
+#include "system/system_safe_mode.h"
+#include "signal/board_fixed_signals.h"
+
+#include "task/task_boot.h"
 
 
-// Config global
-extern Configuracion cfg;
 
-void setup()
+// --------------------------------------------------
+// SAFE MODE
+// --------------------------------------------------
+extern bool g_safeMode;
+
+static void checkSafeMode()
 {
-    Serial.begin(115200);
-    delay(300);
+    auto& nvs = NVS::sys();
 
-    // --- Core ---
-    systemSyncInit();
-    watchdogInit(10000);
+    uint32_t lastWdt = nvs.getUInt("lastWdtTs", 0);
+    uint32_t nowTs   = millis();
 
-    // --- Hardware base (no depende de config) ---
-    initHardwareBasico();
-
-    SystemMode mode = detectSystemMode();
-
-    switch (mode)
+    if (g_lastResetWdt)
     {
-    case SystemMode::NORMAL:
-        cargarConfiguracion(cfg, mode);
-        restoreAlarmRuntimeFromPersistence();
-        arrancarTareasSistema(cfg);
-        break;
+        if (lastWdt != 0 && (nowTs - lastWdt) < 600000) // 10 min
+        {
+            g_safeMode = true;
+            escribirLog("SAFE MODE: Activado por reinicios WDT");
+        }
+        nvs.putUInt("lastWdtTs", nowTs);
+    }
+    else
+    {
+        nvs.putUInt("lastWdtTs", 0);
+    }
+}
+ void setup()
+{
+    g_safeMode = false;
+    Serial.begin(115200);
 
-    case SystemMode::SAFE:
-        cargarConfigSafe();
-        alarmRuntimeClearAll();
-        arrancarTareasMinimas(); // sin alarmas
-        break;
+    // -------------------------
+    // NVS + logs (siempre)
+    // -------------------------
+    inicializarSD();
+    logBootReason();
 
-    case SystemMode::RECOVERY:
-        cargarConfigRecovery();
-        alarmRuntimeClearAll();
-        arrancarTareasRecovery(); // web + mqtt básico
-        break;
+    // -------------------------
+    // SAFE MODE
+    // -------------------------
+    systemSafeModeInit();
+
+    escribirLog("SYS: SafeMode=%s",
+        systemInSafeMode() ? "ON" : "OFF");
+
+    // -------------------------
+    // Señales (registro + persistencia)
+    // -------------------------
+    signalManagerInit();          // registerSystem + load calib
+
+    // -------------------------
+    // Fault system
+    // -------------------------
+    systemFaultInit();
+    faultOutputInit();
+
+    // 4️⃣ Cargar configuración
+    Configuracion cfg;
+    cargarConfiguracion(cfg, SystemMode::NORMAL);
+
+    if (systemInSafeMode())
+    {
+        escribirLog("SYS:Arranque en SAFE MODE");
+        cfg.systemMode = SystemMode::RECOVERY;
     }
 
-    initHardwareConfigurado(cfg);
+    // 5️⃣ Aplicar config global (RTC, red, etc.)
+    aplicarConfiguracionGlobal(cfg);
 
-    markBootSuccess();
+ // 6️⃣ Señales y alarmas (solo registro + persistencia)
+    signalManagerInit();
+    alarmPersistenceLoadAll();
 
-    escribirLog("SYS:READY");
+    // 7️⃣ Tareas mínimas (SIEMPRE)
+    arrancarTareasMinimas();
+
+    // 8️⃣ Tareas normales SOLO si no safe mode
+    if (!systemInSafeMode())
+    {
+        arrancarTareasNormales();
+    }
 }
+
 
 void loop()
 {
-    watchdogKick(WDT_MAIN);
-    delay(1000);
+    vTaskDelay(pdMS_TO_TICKS(1000));
 }
+
+

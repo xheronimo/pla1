@@ -1,28 +1,29 @@
-//LogSystem.h
-#ifndef LOGSYSTEM_H
-#define LOGSYSTEM_H
+#ifndef LOG_SYSTEM_H
+#define LOG_SYSTEM_H
 
 #include <Arduino.h>
-#include <FS.h>
-#include <SD.h>
-#include <SPI.h>
 
+#define LOG_RAM_MAX 2500
+#define LOG_QUEUE_SIZE 15
 
-// Definir el pin CS para la SD
-#define SD_CS 5
+class LogSystem {
+private:
+    char buffer[LOG_RAM_MAX];
+    size_t head;
+    bool isFull;
+    SemaphoreHandle_t mutex;
 
+public:
+    LogSystem();
+    void addLog(const char* text);
+    String getLogs();
+    void clear();
+};
 
-
-// Solo debe existir esta declaración para escribir logs
-void escribirLog(const char* formato, ...);
-
+// Funciones globales y de inicialización
 bool inicializarSD();
-bool leerLog(void (*callback)(File&));
-void borrarLog();
-void leerLogConsola();
-
+void escribirLog(const char *fmt, ...);
 String obtenerLogSistema();
 void limpiarLogSistema();
-
 
 #endif

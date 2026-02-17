@@ -7,3 +7,6 @@ void initHardwareBasico();
 
 // Hardware lógico (depende de config)
 void initHardwareConfigurado(const Configuracion& cfg);
+
+void initGpioOutputsFromSignals();
+void hardware_setup_relays();

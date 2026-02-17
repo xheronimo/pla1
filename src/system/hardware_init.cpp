@@ -11,12 +11,18 @@
 
 // Opcionales (pueden ser stubs)
 #include "RelojSistema.h"
+#include "system/boot_reason.h"
+#include "i2c/pcf_driver.h"
+#include "signal/signal_manager.h"
 
 // ==================================================
 // A) HARDWARE BÁSICO (NO depende de config)
 // ==================================================
 void initHardwareBasico()
 {
+    logBootReason();
+
+    
     // ---------------- I2C ----------------
     if (BusI2C_Init())
         escribirLog("HW:I2C:OK");
@@ -85,5 +91,24 @@ void initHardwareConfigurado(const Configuracion& cfg)
         cargarHoraInicial();
         iniciarTaskNtp();
         escribirLog("HW:RTC:NTP");
+    }
+}
+
+void initGpioOutputsFromSignals()
+{
+    size_t count = signalManagerCount();
+
+    for (size_t i = 0; i < count; i++)
+    {
+        Signal* s = signalManagerGet(i);
+        if (!s) continue;
+
+        if (s->bus == BusType::BUS_GPIO && s->writable)
+        {
+            pinMode(s->channel, OUTPUT);
+
+            // Estado seguro inicial
+            digitalWrite(s->channel, LOW);
+        }
     }
 }

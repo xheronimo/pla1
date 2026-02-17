@@ -3,7 +3,7 @@
 #include "signal/signal_manager.h"
 #include <Arduino.h>
 
-void taskSignalPolling(void* pvParameters)
+static void taskSignalPolling(void* pvParameters)
 {
     (void) pvParameters;
 
@@ -14,4 +14,17 @@ void taskSignalPolling(void* pvParameters)
         signalManagerPollAll();
         vTaskDelay(delay);
     }
+}
+
+void startSignalPollingTask()
+{
+     xTaskCreatePinnedToCore(
+        taskSignalPolling,
+        "SignalPoll",
+        4096,
+        nullptr,
+        5,
+        nullptr,
+        1
+    );
 }

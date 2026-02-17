@@ -1,3 +1,3 @@
 #pragma once
 
-void taskI2CRecovery(void* pvParameters);
+void startI2CRecoveryTask();

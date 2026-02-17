@@ -1,5 +1,6 @@
 #include "system_boot.h"
 #include <Arduino.h>
+#include <esp_system.h>
 
 // ================================
 // CONFIGURACIÓN
@@ -16,6 +17,8 @@
 RTC_DATA_ATTR uint8_t  bootFailCount = 0;
 RTC_DATA_ATTR uint32_t lastBootTs     = 0;
 
+
+static esp_reset_reason_t g_lastResetReason;
 // ================================
 // PINES
 // ================================
@@ -90,4 +93,14 @@ SystemMode detectSystemMode()
         return SystemMode::SAFE;
 
     return SystemMode::NORMAL;
+}
+
+void systemBootInit()
+{
+    g_lastResetReason = esp_reset_reason();
+}
+
+esp_reset_reason_t systemGetLastReset()
+{
+    return g_lastResetReason;
 }
