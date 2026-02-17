@@ -1,31 +1,16 @@
 #pragma once
 
+#include <stdint.h>
 #include "signal/signal_struct.h"
-#include "i2c/i2c_chip_context.h"
+#include "i2c_chip_context.h"
+#include "i2c_chip_registry.h"
+#include "i2c_bus.h"
 
-// ==============================
-// CONFIG
-// ==============================
-#define BME280_MAX_CHIPS   8
-#define BME280_CACHE_MS   1000
+#define BME280_CACHE_MS  500
 
-// ==============================
-// CANALES
-// ==============================
-// channel:
-// 0 → Temperatura (°C)
-// 1 → Humedad (%)
-// 2 → Presión (hPa)
-
-// ==============================
-// OPCIONES (Signal.options)
-// ==============================
-// bits 0..1 → oversampling
-// 0 = x1
-// 1 = x2
-// 2 = x4
-// 3 = x8
-// ==============================
-bool bme280Init(uint8_t addr, uint8_t options = 0);
-bool leerSignalBME280(const Signal& s, float& out);
+// API estándar
+bool bme280Init(uint8_t addr, uint8_t options);
+bool bme280ReadSignal(const Signal& s, float& out);
+void bme280GetMetadata(ChipMetadata& meta);
 void bme280Reset();
+bool bme280Detect(uint8_t addr);

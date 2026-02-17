@@ -1,40 +1,20 @@
 #pragma once
 
-#include <Arduino.h>
-#include <Wire.h>
+#include <stdint.h>
 #include "signal/signal_struct.h"
+#include "i2c/i2c_chip_context.h"
+#include "i2c/i2c_chip_registry.h"
+#include "i2c/i2c_bus.h"
 
-// -----------------------------
-// REGISTROS INA219
-// -----------------------------
-#define INA219_REG_CONFIG        0x00
-#define INA219_REG_SHUNT_VOLT    0x01
-#define INA219_REG_BUS_VOLT      0x02
-#define INA219_REG_POWER         0x03
-#define INA219_REG_CURRENT       0x04
-#define INA219_REG_CALIBRATION   0x05
+#define INA219_CACHE_MS 300
 
-// -----------------------------
-// AJUSTES HW
-// -----------------------------
-constexpr float INA219_SHUNT_OHMS = 0.1f;
+// Canales:
+// 0 → Voltage (V)
+// 1 → Current (A)
+// 2 → Power (W)
 
-// -----------------------------
-// CACHE
-// -----------------------------
-#define INA219_MAX_CHIPS   8
-#define INA219_CACHE_MS    500
-
-struct Ina219Cache {
-    bool     valid;
-    uint32_t lastReadMs;
-    float    voltage;   // V
-    float    current;   // A
-    float    power;     // W
-};
-
-// -----------------------------
-// API
-// -----------------------------
-bool leerSignalINA219(const Signal& s, float& out, uint8_t options);
-void ina219ResetCaches();
+bool ina219Init(uint8_t addr, uint8_t options);
+bool ina219ReadSignal(const Signal& s, float& out);
+void ina219GetMetadata(ChipMetadata& meta);
+void ina219Reset();
+bool ina219Detect(uint8_t addr);

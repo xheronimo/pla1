@@ -1,0 +1,36 @@
+#include "modbus_blocks.h"
+#include "signal/signal_table.h"
+
+static ModbusBlock g_blocks[MODBUS_MAX_BLOCKS];
+static size_t g_blockCount = 0;
+
+size_t modbusBuildBlocks()
+{
+    g_blockCount = 0;
+
+    size_t count = signalCount();
+
+    for (size_t i = 0; i < count; i++)
+    {
+        Signal* s = signalGet(i);
+        if (!s || s->bus != BusType::MODBUS)
+            continue;
+
+        if (g_blockCount >= MODBUS_MAX_BLOCKS)
+            break;
+
+        ModbusBlock& b = g_blocks[g_blockCount++];
+        b.slaveId = s->address;
+        b.startReg = s->channel;
+        b.length = s->wordCount ? s->wordCount : 1;
+        b.holding = (s->modbusType == ModbusRegType::MODBUS_HOLDING);
+    }
+
+    return g_blockCount;
+}
+
+ModbusBlock* modbusGetBlocks(size_t& count)
+{
+    count = g_blockCount;
+    return g_blocks;
+}

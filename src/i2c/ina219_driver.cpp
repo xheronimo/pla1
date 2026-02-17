@@ -1,115 +1,73 @@
 #include "i2c/ina219_driver.h"
-#include <Wire.h>
-#include <freertos/FreeRTOS.h>
-#include <freertos/semphr.h>
+#include "i2c/i2c_chip_context.h"
+#include "i2c/i2c_bus.h"
+#include "i2c_chip_guard.h"
+#include <Arduino.h>
 
 // ==============================
-// REGISTROS INA219
+// REGISTROS
 // ==============================
-#define INA219_REG_CONFIG       0x00
-#define INA219_REG_SHUNT_VOLT   0x01
-#define INA219_REG_BUS_VOLT     0x02
+#define INA219_REG_CONFIG      0x00
+#define INA219_REG_SHUNT_VOLT  0x01
+#define INA219_REG_BUS_VOLT    0x02
 
 // ==============================
 // CONFIG HW
 // ==============================
 constexpr float INA219_SHUNT_OHMS = 0.1f;
-constexpr float INA219_BUS_LSB    = 0.004f;     // 4 mV
-constexpr float INA219_SHUNT_LSB  = 0.00001f;   // 10 µV
+constexpr float INA219_BUS_LSB    = 0.004f;     // 4mV
+constexpr float INA219_SHUNT_LSB  = 0.00001f;   // 10uV
 
 // ==============================
 // CACHE
 // ==============================
 struct Ina219Cache {
-    bool     valid = false;
-    float    voltage = 0.0f;
-    float    current = 0.0f;
-    float    power   = 0.0f;
+    bool valid = false;
+    float voltage = 0.0f;
+    float current = 0.0f;
+    float power   = 0.0f;
     uint32_t lastReadMs = 0;
 };
 
-static Ina219Cache cache[INA219_MAX_CHIPS];
-static ChipContext ctx[INA219_MAX_CHIPS];
+static Ina219Cache cache[8];
 
-// ==============================
-// MUTEX I2C
-// ==============================
-static SemaphoreHandle_t i2cMutex = nullptr;
+// ============================================================
+// INIT
+// ============================================================
 
-static void ensureMutex()
+bool ina219Init(uint8_t addr, uint8_t options)
 {
-    if (!i2cMutex)
-        i2cMutex = xSemaphoreCreateMutex();
-}
+    ChipContext* ctx = i2cGetChipContext(I2CDevice::INA219, addr);
+    if (!ctx) return false;
 
-// ==============================
-// LOW LEVEL I2C
-// ==============================
-static bool i2cRead16(uint8_t addr, uint8_t reg, uint16_t& out)
-{
-    Wire.beginTransmission(addr);
-    Wire.write(reg);
-    if (Wire.endTransmission(false) != 0)
-        return false;
+    ctx->state = ChipState::STATE_INITIALIZING;
+    ctx->initTs = millis();
+    ctx->warmupMs = 2;
+    ctx->retryMs = 2000;
+    ctx->consecutiveErrors = 0;
 
-    if (Wire.requestFrom(addr, (uint8_t)2) != 2)
-        return false;
+    uint16_t config;
 
-    out = (Wire.read() << 8) | Wire.read();
-    return true;
-}
-
-// ==============================
-// INIT (NO BLOQUEANTE)
-// ==============================
-static bool ina219Init(uint8_t addr, ChipContext& c, uint8_t options)
-{
-    uint8_t range32V = options & 0x01;
-    uint8_t avgBits  = (options >> 1) & 0x03;
-
-    uint8_t cfgMSB = 0;
-    uint8_t cfgLSB = 0;
-
-    // -----------------------------
-    // RANGO
-    // -----------------------------
-    if (range32V)
-        cfgMSB = 0x39;   // 32V
+    if (options == 1)
+        config = 0x399F;  // 32V
     else
-        cfgMSB = 0x01;   // 16V
+        config = 0x019F;  // 16V
 
-    // -----------------------------
-    // PROMEDIADO
-    // -----------------------------
-    switch (avgBits)
-    {
-        case 0: cfgLSB = 0x9F; break; // 16 samples
-        case 1: cfgLSB = 0xBF; break; // 64 samples
-        case 2: cfgLSB = 0xFF; break; // 128 samples
-        default: cfgLSB = 0x9F; break;
-    }
-
-    Wire.beginTransmission(addr);
-    Wire.write(INA219_REG_CONFIG);
-    Wire.write(cfgMSB);
-    Wire.write(cfgLSB);
-
-    if (Wire.endTransmission() != 0)
+    if (!i2cWrite16(addr, INA219_REG_CONFIG, config))
         return false;
 
-    c.state = ChipState::READY;
-    c.consecutiveErrors = 0;
+    ctx->state = ChipState::STATE_READY;
     return true;
 }
 
-
-// ==============================
+// ============================================================
 // READ ALL
-// ==============================
+// ============================================================
+
 static bool ina219ReadAll(uint8_t addr, Ina219Cache& c)
 {
-    uint16_t rawBus   = 0;
-    uint16_t rawShunt = 0;
+    uint16_t rawBus;
+    uint16_t rawShunt;
 
     if (!i2cRead16(addr, INA219_REG_BUS_VOLT, rawBus))
         return false;
@@ -131,88 +89,47 @@ static bool ina219ReadAll(uint8_t addr, Ina219Cache& c)
     return true;
 }
 
-// ==============================
+// ============================================================
 // API PRINCIPAL
-// ==============================
-bool leerSignalINA219(const Signal& s, float& out)
-{
-    ensureMutex();
+// ============================================================
 
-    uint8_t idx = s.address & 0x07;
-    Ina219Cache& c  = cache[idx];
-    ChipContext& cc = ctx[idx];
+bool ina219ReadSignal(const Signal& s, float& out)
+{
+    ChipContext* ctx = i2cGetChipContext(I2CDevice::INA219, s.address);
+    if (!ctx) return false;
 
     uint32_t now = millis();
 
-    // -----------------------------
-    // SAFE CHIP
-    // -----------------------------
-    if (cc.state == ChipState::ERROR) {
-        if (now - cc.lastReadTs > cc.retryMs) {
-            cc.state = ChipState::UNINITIALIZED;
-            cc.consecutiveErrors = 0;
-        }
+    // Guard común (error, cooldown, warmup, disabled...)
+    if (!i2cChipGuardBeforeRead(ctx, now))
         return false;
-    }
 
-    // -----------------------------
-    // INIT
-    // -----------------------------
-    if (cc.state == ChipState::UNINITIALIZED)
+    // INIT cascada
+    if (ctx->state == ChipState::STATE_UNINITIALIZED)
     {
-        if (xSemaphoreTake(i2cMutex, pdMS_TO_TICKS(50)) != pdTRUE)
-            return false;
-
-        bool ok = ina219Init(s.address, cc, s.options);
-
-        xSemaphoreGive(i2cMutex);
-
-        if (!ok) {
-            cc.consecutiveErrors++;
-            cc.errorCount++;
-
-            if (cc.consecutiveErrors >= 5)
-                cc.state = ChipState::ERROR;
-
+        if (!ina219Init(s.address, s.options))
+        {
+            i2cChipGuardOnError(ctx);
             return false;
         }
-
-        cc.lastReadTs = now;
         return false;
     }
 
-    if (cc.state != ChipState::READY)
-        return false;
+    // Cache por dirección
+    uint8_t idx = s.address & 0x07;
+    Ina219Cache& c = cache[idx];
 
-    // -----------------------------
-    // CACHE
-    // -----------------------------
-    if (!c.valid || now - c.lastReadMs > INA219_CACHE_MS)
+    if (!c.valid || (now - c.lastReadMs > INA219_CACHE_MS))
     {
-        if (xSemaphoreTake(i2cMutex, pdMS_TO_TICKS(50)) != pdTRUE)
-            return false;
-
-        bool ok = ina219ReadAll(s.address, c);
-
-        xSemaphoreGive(i2cMutex);
-
-        if (!ok) {
-            cc.consecutiveErrors++;
-            cc.errorCount++;
-
-            if (cc.consecutiveErrors >= 5)
-                cc.state = ChipState::ERROR;
-
+        if (!ina219ReadAll(s.address, c))
+        {
+            i2cChipGuardOnError(ctx);
             return false;
         }
 
-        cc.consecutiveErrors = 0;
-        cc.lastReadTs = now;
+        i2cChipGuardOnSuccess(ctx, now);
     }
 
-    // -----------------------------
-    // CANALES
-    // -----------------------------
     switch (s.channel)
     {
         case 0: out = c.voltage; return true;
@@ -222,14 +139,43 @@ bool leerSignalINA219(const Signal& s, float& out)
     }
 }
 
-// ==============================
+// ============================================================
+// METADATA
+// ============================================================
+
+void ina219GetMetadata(ChipMetadata& meta)
+{
+    static const char* ranges[] = {
+        "16V Range",
+        "32V Range"
+    };
+
+    meta.name = "INA219 Power Monitor";
+    meta.channelCount = 3;
+
+    meta.opt1.label = "Voltage Range";
+    meta.opt1.values = ranges;
+    meta.opt1.valueCount = 2;
+    meta.opt1.defaultIndex = 0;
+
+    meta.opt2.label = nullptr;
+    meta.opt2.values = nullptr;
+    meta.opt2.valueCount = 0;
+    meta.opt2.defaultIndex = 0;
+}
+
+// ============================================================
 // RESET
-// ==============================
+// ============================================================
+
 void ina219Reset()
 {
-    for (uint8_t i = 0; i < INA219_MAX_CHIPS; i++)
-    {
+    for (int i = 0; i < 8; i++)
         cache[i] = {};
-        ctx[i]   = {};
-    }
+}
+
+bool ina219Detect(uint8_t addr)
+{
+    uint16_t config;
+    return i2cRead16(addr, INA219_REG_CONFIG, config);
 }

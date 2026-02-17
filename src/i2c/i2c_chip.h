@@ -1,6 +1,5 @@
 #pragma once
 #include <stdint.h>
-
 enum class I2CDevice : uint8_t {
     NONE = 0,
 
@@ -22,6 +21,8 @@ enum class I2CDevice : uint8_t {
     //CO
     CCS811,
     ENS160,
-    BME280
-};
+    BME280,
 
+    
+    MAX
+};

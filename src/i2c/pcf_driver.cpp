@@ -1,219 +1,158 @@
-#include "i2c/pcf_driver.h"
+#include "pcf_driver.h"
+
 #include <Wire.h>
-#include <freertos/FreeRTOS.h>
-#include <freertos/semphr.h>
+#include "i2c/i2c_chip_context.h"
+#include "i2c/i2c_bus.h"
+#include "i2c/i2c_chip_guard.h"
+#include "system/LogSystem.h"
 
-// =================================================
-// CACHES SEPARADAS
-// =================================================
-static PcfCache cacheUser[PCF_MAX_CHIPS];
-static PcfCache cacheSystem[PCF_MAX_CHIPS];
-
-// =================================================
-// MUTEX I2C
-// =================================================
-static SemaphoreHandle_t i2cMutex = nullptr;
-
-static void ensureMutex()
+// =======================================================
+// DETECT
+// =======================================================
+bool pcfDetect8574(uint8_t addr)
 {
-    if (!i2cMutex)
-        i2cMutex = xSemaphoreCreateMutex();
+    Wire.beginTransmission(addr);
+    return (Wire.endTransmission() == 0);
 }
 
-// =================================================
-// LOW LEVEL READ
-// =================================================
-static bool readPCF(uint8_t addr, I2CDevice chip, uint16_t& out)
+bool pcfDetect8575(uint8_t addr)
 {
-    if (chip == I2CDevice::PCF8574)
-    {
-        Wire.requestFrom(addr, (uint8_t)1);
-        if (Wire.available() < 1) return false;
-        out = Wire.read();
-        return true;
-    }
-
-    if (chip == I2CDevice::PCF8575)
-    {
-        Wire.requestFrom(addr, (uint8_t)2);
-        if (Wire.available() < 2) return false;
-        uint8_t lo = Wire.read();
-        uint8_t hi = Wire.read();
-        out = (hi << 8) | lo;
-        return true;
-    }
-
-    return false;
+    Wire.beginTransmission(addr);
+    return (Wire.endTransmission() == 0);
 }
 
-// =================================================
-// LOW LEVEL WRITE
-// =================================================
-static bool writePCF(uint8_t addr, I2CDevice chip, uint16_t value)
+// =======================================================
+// INIT (PCF8574 / PCF8575)
+// =======================================================
+bool pcfInit(uint8_t addr, uint8_t /*options*/)
 {
     Wire.beginTransmission(addr);
 
-    if (chip == I2CDevice::PCF8574)
-    {
-        Wire.write((uint8_t)value);
-    }
-    else if (chip == I2CDevice::PCF8575)
-    {
-        Wire.write(value & 0xFF);
-        Wire.write(value >> 8);
-    }
-    else
-        return false;
+    // Estado seguro: todo HIGH
+    Wire.write(0xFF);
+    Wire.write(0xFF); // no daña en 8574, necesario en 8575
 
-    return Wire.endTransmission() == 0;
+    return (Wire.endTransmission() == 0);
 }
 
-// =================================================
-// COMMON READ
-// =================================================
-static bool leerPCF(const Signal& s, PcfCache* cacheArray, float& out)
+// =======================================================
+// READ SIGNAL
+// =======================================================
+bool pcfReadSignal(const Signal& s, float& out)
 {
-    ensureMutex();
-
-    uint8_t idx = s.address & 0x07;
-    if (idx >= PCF_MAX_CHIPS) return false;
-
-    PcfCache& c = cacheArray[idx];
-    uint32_t now = millis();
-
-    if (c.errorCount >= PCF_MAX_ERRORS)
-    {
-        if (now - c.lastReadMs < 2000)
-            return false;
-        c.errorCount = 0;
-    }
-
-    if (!c.valid || now - c.lastReadMs > PCF_CACHE_MS)
-    {
-        if (xSemaphoreTake(i2cMutex, pdMS_TO_TICKS(50)) != pdTRUE)
-            return false;
-
-        bool ok = readPCF(s.address, s.chip, c.value);
-
-        xSemaphoreGive(i2cMutex);
-
-        if (!ok)
-        {
-            c.errorCount++;
-            c.valid = false;
-            c.lastReadMs = now;
-            return false;
-        }
-
-        c.valid = true;
-        c.lastReadMs = now;
-        c.errorCount = 0;
-    }
-
-    uint8_t bit = s.channel;
-
-    if ((s.chip == I2CDevice::PCF8574 && bit > 7) ||
-        (s.chip == I2CDevice::PCF8575 && bit > 15))
+    ChipContext* ctx = i2cGetChipContext(s.chip, s.address);
+    if (!ctx)
         return false;
 
-    bool level = (c.value >> bit) & 0x01;
-    out = level ? 1.0f : 0.0f;
+    uint32_t now = millis();
+
+    if (!i2cChipGuardBeforeRead(ctx, now))
+        return false;
+
+    SemaphoreHandle_t m = i2cGetMutex();
+    if (!m)
+        return false;
+
+    if (xSemaphoreTake(m, pdMS_TO_TICKS(20)) != pdTRUE)
+        return false;
+
+    uint16_t value = 0;
+
+    Wire.requestFrom((int)s.address,
+                     (s.chip == I2CDevice::PCF8575) ? 2 : 1);
+
+    if (Wire.available())
+    {
+        value = Wire.read();
+        if (s.chip == I2CDevice::PCF8575 && Wire.available())
+            value |= (Wire.read() << 8);
+    }
+
+    xSemaphoreGive(m);
+
+    ctx->shadow = value;
+    ctx->shadowValid = true;
+
+    bool bit = (value >> s.channel) & 0x01;
+    out = bit ? 1.0f : 0.0f;
+
+    i2cChipGuardOnSuccess(ctx, now);
     return true;
 }
 
-// =================================================
-// COMMON WRITE
-// =================================================
-static bool escribirPCF(const Signal& s, PcfCache* cacheArray, float value)
+// =======================================================
+// WRITE SIGNAL
+// =======================================================
+bool pcfWriteSignal(const Signal& s, float value)
 {
-    ensureMutex();
-
-    uint8_t idx = s.address & 0x07;
-    if (idx >= PCF_MAX_CHIPS) return false;
-
-    PcfCache& c = cacheArray[idx];
-
-    uint8_t bit = s.channel;
-    bool level = (value != 0.0f);
-
-    if ((s.chip == I2CDevice::PCF8574 && bit > 7) ||
-        (s.chip == I2CDevice::PCF8575 && bit > 15))
+    if (!s.writable)
         return false;
 
-    // Inicializar cache si no existe
-    if (!c.valid)
+    ChipContext* ctx = i2cGetChipContext(s.chip, s.address);
+    if (!ctx)
+        return false;
+
+    uint32_t now = millis();
+
+    if (!i2cChipGuardBeforeRead(ctx, now))
+        return false;
+
+    if (!ctx->shadowValid)
     {
-        if (xSemaphoreTake(i2cMutex, pdMS_TO_TICKS(50)) != pdTRUE)
-            return false;
-
-        bool ok = readPCF(s.address, s.chip, c.value);
-        xSemaphoreGive(i2cMutex);
-
-        if (!ok)
-        {
-            c.errorCount++;
-            return false;
-        }
-        c.valid = true;
+        // No tocamos nada si no sabemos el estado
+        i2cChipGuardOnError(ctx);
+        return false;
     }
 
-    // Modificar bit
-    if (level)
-        c.value |= (1 << bit);
-    else
-        c.value &= ~(1 << bit);
-
-    // Escribir todo el puerto
-    if (xSemaphoreTake(i2cMutex, pdMS_TO_TICKS(50)) != pdTRUE)
+    SemaphoreHandle_t m = i2cGetMutex();
+    if (!m)
         return false;
 
-    bool ok = writePCF(s.address, s.chip, c.value);
-    xSemaphoreGive(i2cMutex);
+    if (xSemaphoreTake(m, pdMS_TO_TICKS(20)) != pdTRUE)
+        return false;
+
+    uint16_t outv = ctx->shadow;
+    bool high = (value > 0.5f);
+
+    if (high)
+        outv |= (1 << s.channel);
+    else
+        outv &= ~(1 << s.channel);
+
+    Wire.beginTransmission(s.address);
+    Wire.write(outv & 0xFF);
+
+    if (s.chip == I2CDevice::PCF8575)
+        Wire.write((outv >> 8) & 0xFF);
+
+    bool ok = (Wire.endTransmission() == 0);
+
+    xSemaphoreGive(m);
 
     if (!ok)
     {
-        c.errorCount++;
-        c.valid = false;
+        i2cChipGuardOnError(ctx);
         return false;
     }
 
-    c.lastReadMs = millis();
-    c.errorCount = 0;
+    ctx->shadow = outv;
+    ctx->shadowValid = true;
+
+    i2cChipGuardOnSuccess(ctx, now);
     return true;
 }
 
-// =================================================
-// API USER
-// =================================================
-bool leerSignalPCF_User(const Signal& s, float& out)
+// =======================================================
+// METADATA
+// =======================================================
+void pcf8574GetMetadata(ChipMetadata& meta)
 {
-    return leerPCF(s, cacheUser, out);
+    meta.name = "PCF8574";
+    meta.channelCount = 8;
 }
 
-bool escribirSignalPCF_User(const Signal& s, float value)
+void pcf8575GetMetadata(ChipMetadata& meta)
 {
-    return escribirPCF(s, cacheUser, value);
-}
-
-// =================================================
-// API SYSTEM
-// =================================================
-bool leerSignalPCF_System(const Signal& s, float& out)
-{
-    return leerPCF(s, cacheSystem, out);
-}
-
-bool escribirSignalPCF_System(const Signal& s, float value)
-{
-    return escribirPCF(s, cacheSystem, value);
-}
-
-// =================================================
-void pcfResetCaches()
-{
-    for (uint8_t i = 0; i < PCF_MAX_CHIPS; i++)
-    {
-        cacheUser[i]   = {};
-        cacheSystem[i] = {};
-    }
+    meta.name = "PCF8575";
+    meta.channelCount = 16;
 }

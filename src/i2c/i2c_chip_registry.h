@@ -1,19 +1,62 @@
 #pragma once
 #include <stdint.h>
-#include "i2c_chip_context.h"
-#include "signal/signal_struct.h"
+#include "i2c_chip.h"
 
-#define MAX_I2C_CHIPS 16
 
-struct I2CChipEntry {
-    BusType     bus;
-    I2CDevice   chip;
-    uint8_t     address;
-    ChipContext ctx;
+#include <cstddef>
+
+// Forward declaration
+struct Signal;
+
+// ================================
+// METADATA
+// ================================
+
+struct ChipOptionDescriptor {
+    const char* label;
+    const char** values;
+    uint8_t valueCount;
+    uint8_t defaultIndex;
 };
 
-void i2cChipRegistryInit();
-ChipContext* i2cGetChipContext(BusType bus, I2CDevice chip, uint8_t addr);
-void i2cRegisterChip(BusType bus, I2CDevice chip, uint8_t addr);
-uint8_t i2cGetChipCount();
-I2CChipEntry* i2cGetAllChips();
+struct ChipMetadata {
+    const char* name;
+    uint8_t channelCount;
+
+    ChipOptionDescriptor opt1;
+    ChipOptionDescriptor opt2;
+};
+
+// ================================
+// DRIVER INTERFACE
+// ================================
+
+typedef bool (*ChipDetectFn)(uint8_t addr);
+typedef bool (*ChipInitFn)(uint8_t addr, uint8_t options);
+typedef bool (*ChipReadFn)(const Signal& s, float& out);
+typedef void (*ChipMetadataFn)(ChipMetadata& meta);
+typedef bool (*ChipWriteFn)(const Signal& s, float value);   // 👈 NUEVO
+
+
+
+struct I2CChipDriver
+{
+    I2CDevice type;
+
+    ChipDetectFn detect;
+    ChipInitFn init;
+    ChipReadFn read;
+    ChipWriteFn    write;
+    ChipMetadataFn meta;
+
+    bool allowAutoDetect;
+};
+
+const I2CChipDriver* i2cGetDriver(I2CDevice type);
+const char* i2cGetDriverName(I2CDevice type);
+bool i2cIsAddressConfigured(uint8_t addr);
+size_t i2cGetDriverCount();
+const I2CChipDriver* i2cGetDriverByIndex(size_t index);
+
+
+

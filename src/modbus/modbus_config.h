@@ -1,0 +1,11 @@
+#pragma once
+
+#define MODBUS_MAX_SLAVES        16
+#define MODBUS_MAX_BLOCKS        32
+#define MODBUS_MAX_BLOCK_REGS    32
+#define MODBUS_MAX_BLOCK_SIZE    32
+
+#define MODBUS_DEFAULT_TIMEOUT_MS     200
+#define MODBUS_DEFAULT_POLL_MS        500
+#define MODBUS_ERROR_THRESHOLD        5
+#define MODBUS_DEFAULT_RETRY_MS  2000

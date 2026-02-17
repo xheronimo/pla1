@@ -1,45 +1,45 @@
 #pragma once
+
 #include <stdint.h>
 #include "signal/signal_struct.h"
-#include "i2c/i2c_chip_context.h"
+#include "i2c_chip_registry.h"
+#include "i2c_bus.h"
 
-// ==============================
-// CONFIG
-// ==============================
-#define ADS1115_MAX_CHIPS   8
-#define ADS1115_CACHE_MS   300
 
-// ==============================
-// OPCIONES
-// ==============================
-enum class Ads1115Gain : uint8_t {
-    GAIN_6_144V = 0,
-    GAIN_4_096V,
-    GAIN_2_048V,
-    GAIN_1_024V,
-    GAIN_0_512V,
-    GAIN_0_256V
-};
 
-enum class Ads1115Rate : uint8_t {
-    SPS_8   = 0,
-    SPS_16,
-    SPS_32,
-    SPS_64,
-    SPS_128,
-    SPS_250,
-    SPS_475,
-    SPS_860
-};
 
-struct Ads1115Options {
-    Ads1115Gain gain;
-    Ads1115Rate rate;
-};
-const Ads1115Options Ads1115Default ={Ads1115Gain::GAIN_4_096V, Ads1115Rate::SPS_128};
-// ==============================
-// API
-// ==============================
-bool ads1115Init(uint8_t addr, const Ads1115Options& opt = Ads1115Default );
-bool leerSignalADS1115(const Signal& s, float& out);
+// =====================================================
+// CONFIGURACIÓN
+// =====================================================
+#define ADS1115_MAX_ADDR_SLOTS  8
+#define ADS1115_CACHE_MS        300
+
+// =====================================================
+// API ESTÁNDAR DRIVER
+// =====================================================
+
+/**
+ * Inicializa un chip ADS1115 en la dirección I2C indicada.
+ * options:
+ *   bits 7..4 → Gain
+ *   bits 3..0 → Data rate
+ */
+bool ads1115Init(uint8_t addr, uint8_t options);
+
+/**
+ * Lee una señal ADS1115.
+ * Usa cache por chip y lectura multi-canal.
+ */
+bool ads1115ReadSignal(const Signal& s, float& out);
+
+/**
+ * Devuelve metadata para el frontend.
+ */
+void ads1115GetMetadata(ChipMetadata& meta);
+
+/**
+ * Resetea cache interna (no toca ChipContext global).
+ */
 void ads1115Reset();
+
+bool ads1115Detect(uint8_t addr);

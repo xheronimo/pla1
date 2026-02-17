@@ -1,34 +1,22 @@
 #pragma once
+
+#include <stdint.h>
 #include "signal/signal_struct.h"
+#include "i2c/i2c_chip_context.h"
+#include "i2c/i2c_chip_registry.h"
+#include "i2c/i2c_bus.h"
 
-// ------------------------------
-// CONFIG
-// ------------------------------
-#define PCF_MAX_CHIPS   8
-#define PCF_CACHE_MS   50
-#define PCF_MAX_ERRORS 5
+// Detect
+bool pcfDetect8574(uint8_t addr);
+bool pcfDetect8575(uint8_t addr);
 
-// ------------------------------
-// CACHE
-// ------------------------------
-struct PcfCache {
-    bool     valid = false;
-    uint16_t value = 0;      // estado completo I/O
-    uint32_t lastReadMs = 0;
-    uint8_t  errorCount = 0;
-};
+// Init común
+bool pcfInit(uint8_t addr, uint8_t options);
 
-// ------------------------------
-// API ENTRADAS
-// ------------------------------
-bool leerSignalPCF_User(const Signal& s, float& out);
-bool leerSignalPCF_System(const Signal& s, float& out);
+// Read / Write por Signal
+bool pcfReadSignal(const Signal& s, float& out);
+bool pcfWriteSignal(const Signal& s, float value);
 
-// ------------------------------
-// API SALIDAS
-// ------------------------------
-bool escribirSignalPCF_User(const Signal& s, float value);
-bool escribirSignalPCF_System(const Signal& s, float value);
-
-// ------------------------------
-void pcfResetCaches();
+// Metadata
+void pcf8574GetMetadata(ChipMetadata& meta);
+void pcf8575GetMetadata(ChipMetadata& meta);

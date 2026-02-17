@@ -1,31 +1,19 @@
 #pragma once
+
 #include <stdint.h>
 #include "signal/signal_struct.h"
 #include "i2c/i2c_chip_context.h"
+#include "i2c/i2c_chip_registry.h"
+#include "i2c/i2c_bus.h"
 
-// -----------------------------
-// CONFIG
-// -----------------------------
-#define SHT31_MAX_CHIPS  8
-#define SHT31_CACHE_MS   500
+#define SHT31_CACHE_MS 500
 
-// -----------------------------
-// OPCIONES
-// -----------------------------
-enum class Sht31Repeatability : uint8_t {
-    LOW,
-    MEDIUM,
-    HIGH
-};
+// Canales:
+// 0 → Temperature (°C)
+// 1 → Humidity (%RH)
 
-struct Sht31Options {
-    Sht31Repeatability repeatability;
-    bool heater;
-};
-const Sht31Options SHT31_DEFAULT_OPT = { Sht31Repeatability::HIGH, false };
-// -----------------------------
-// API
-// -----------------------------
-bool sht31Init(uint8_t addr, const Sht31Options& opt= SHT31_DEFAULT_OPT);
-bool leerSignalSHT31(const Signal& s, float& out);
+bool sht31Init(uint8_t addr, uint8_t options);
+bool sht31ReadSignal(const Signal& s, float& out);
+void sht31GetMetadata(ChipMetadata& meta);
 void sht31Reset();
+bool sht31Detect(uint8_t addr);

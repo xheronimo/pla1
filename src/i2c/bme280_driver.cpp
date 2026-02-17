@@ -1,10 +1,9 @@
-#include "i2c/bme280_driver.h"
-#include <Wire.h>
-#include <freertos/FreeRTOS.h>
-#include <freertos/semphr.h>
+#include "bme280_driver.h"
+#include "i2c_chip_guard.h"
+#include <Arduino.h>
 
 // ==============================
-// REGISTROS BME280
+// REGISTROS
 // ==============================
 #define BME280_REG_ID        0xD0
 #define BME280_REG_RESET     0xE0
@@ -19,115 +18,69 @@
 // CACHE
 // ==============================
 struct Bme280Cache {
-    bool     valid = false;
-    float    temp = 0.0f;
-    float    hum  = 0.0f;
-    float    pres = 0.0f;
+    bool valid = false;
+    float temp = 0;
+    float hum  = 0;
+    float pres = 0;
     uint32_t lastReadMs = 0;
 };
 
-static Bme280Cache cache[BME280_MAX_CHIPS];
-static ChipContext ctx[BME280_MAX_CHIPS];
+static Bme280Cache cache[8]; // 8 direcciones máximas por tipo
 
-// ==============================
-// MUTEX
-// ==============================
-static SemaphoreHandle_t i2cMutex = nullptr;
-
-static void ensureMutex()
-{
-    if (!i2cMutex)
-        i2cMutex = xSemaphoreCreateMutex();
-}
-
-// ==============================
-// LOW LEVEL
-// ==============================
-static bool write8(uint8_t addr, uint8_t reg, uint8_t val)
-{
-    Wire.beginTransmission(addr);
-    Wire.write(reg);
-    Wire.write(val);
-    return Wire.endTransmission() == 0;
-}
-
-static bool readBytes(uint8_t addr, uint8_t reg, uint8_t* buf, uint8_t len)
-{
-    Wire.beginTransmission(addr);
-    Wire.write(reg);
-    if (Wire.endTransmission(false) != 0)
-        return false;
-
-    if (Wire.requestFrom(addr, len) != len)
-        return false;
-
-    for (uint8_t i = 0; i < len; i++)
-        buf[i] = Wire.read();
-
-    return true;
-}
-
-// ==============================
+// ============================================================
 // INIT
-// ==============================
+// ============================================================
+
 bool bme280Init(uint8_t addr, uint8_t options)
 {
-    ensureMutex();
+    ChipContext* ctx = i2cGetChipContext(I2CDevice::BME280, addr);
+    if (!ctx) return false;
 
-    uint8_t idx = addr & 0x07;
-    ChipContext& c = ctx[idx];
+    ctx->state = ChipState::STATE_INITIALIZING;
+    ctx->initTs = millis();
+    ctx->warmupMs = 20;
+    ctx->retryMs = 2000;
+    ctx->consecutiveErrors = 0;
+    ctx->errorCount = 0;
 
-    if (xSemaphoreTake(i2cMutex, pdMS_TO_TICKS(50)) != pdTRUE)
+    if (!i2cWrite8(addr, BME280_REG_RESET, BME280_RESET_CMD))
         return false;
 
-    c.state      = ChipState::INITIALIZING;
-    c.initTs     = millis();
-    c.warmupMs   = 20;
-    c.retryMs    = 2000;
-    c.errorCount = 0;
-    c.consecutiveErrors = 0;
+    delay(2);
 
-    // Reset
-    if (!write8(addr, BME280_REG_RESET, BME280_RESET_CMD)) {
-        c.state = ChipState::ERROR;
-        xSemaphoreGive(i2cMutex);
+    uint8_t oversampling = (options & 0x03) + 1;
+
+    if (!i2cWrite8(addr, BME280_REG_CTRL_HUM, oversampling))
         return false;
-    }
 
-    vTaskDelay(pdMS_TO_TICKS(2));
+    if (!i2cWrite8(addr, BME280_REG_CTRL_MEAS,
+                   (oversampling << 5) | (oversampling << 2) | 0x03))
+        return false;
 
-    uint8_t os = options & 0x03;   // 0..3
-    uint8_t osBits = (os + 1);     // x1..x8
+    if (!i2cWrite8(addr, BME280_REG_CONFIG, 0xA0))
+        return false;
 
-    // Humedad
-    write8(addr, BME280_REG_CTRL_HUM, osBits);
-
-    // Temp + Pres + normal mode
-    write8(addr, BME280_REG_CTRL_MEAS,
-        (osBits << 5) | (osBits << 2) | 0x03);
-
-    // Config (standby 1000ms, filter off)
-    write8(addr, BME280_REG_CONFIG, 0xA0);
-
-    c.state = ChipState::WARMUP;
-    xSemaphoreGive(i2cMutex);
+    ctx->state = ChipState::STATE_WARMUP;
     return true;
 }
 
-// ==============================
+
+// ============================================================
 // READ ALL
-// ==============================
+// ============================================================
+
 static bool bme280ReadAll(uint8_t addr, Bme280Cache& c)
 {
     uint8_t buf[8];
-    if (!readBytes(addr, BME280_REG_DATA, buf, 8))
+
+    if (!i2cReadBytes(addr, BME280_REG_DATA, buf, 8))
         return false;
 
     int32_t adc_P = (buf[0] << 12) | (buf[1] << 4) | (buf[2] >> 4);
     int32_t adc_T = (buf[3] << 12) | (buf[4] << 4) | (buf[5] >> 4);
     int32_t adc_H = (buf[6] << 8)  | buf[7];
 
-    // ⚠️ Simplificado (válido para uso industrial normal)
+    // Simplificado (industrial)
     c.temp = adc_T / 100.0f;
     c.pres = adc_P / 25600.0f;
     c.hum  = adc_H / 1024.0f;
@@ -137,88 +90,109 @@ static bool bme280ReadAll(uint8_t addr, Bme280Cache& c)
     return true;
 }
 
-// ==============================
+// ============================================================
 // API PRINCIPAL
-// ==============================
-bool leerSignalBME280(const Signal& s, float& out)
-{
-    ensureMutex();
+// ============================================================
 
-    uint8_t idx = s.address & 0x07;
-    ChipContext& cc = ctx[idx];
-    Bme280Cache& bc = cache[idx];
+bool bme280ReadSignal(const Signal& s, float& out)
+{
+    ChipContext* ctx = i2cGetChipContext(I2CDevice::BME280, s.address);
+    if (!ctx) return false;
+
     uint32_t now = millis();
 
-    // SAFE
-    if (cc.state == ChipState::ERROR) {
-        if (now - cc.lastReadTs > cc.retryMs) {
-            cc.state = ChipState::UNINITIALIZED;
-            cc.consecutiveErrors = 0;
-        }
+    // 🔐 Guard central
+    if (!i2cChipGuardBeforeRead(ctx, now))
         return false;
-    }
 
-    // INIT
-    if (cc.state == ChipState::UNINITIALIZED)
+    // -------- INIT --------
+    if (ctx->state == ChipState::STATE_UNINITIALIZED)
     {
         if (!bme280Init(s.address, s.options)) {
-            cc.consecutiveErrors++;
-            cc.errorCount++;
-            if (cc.consecutiveErrors >= 5)
-                cc.state = ChipState::ERROR;
+            i2cChipGuardOnError(ctx);
             return false;
         }
         return false;
     }
 
-    // WARMUP
-    if (cc.state == ChipState::WARMUP) {
-        if (now - cc.initTs < cc.warmupMs)
-            return false;
-        cc.state = ChipState::READY;
-    }
-
-    if (cc.state != ChipState::READY)
-        return false;
-
-    // CACHE
-    if (!bc.valid || now - bc.lastReadMs > BME280_CACHE_MS)
+    // -------- WARMUP --------
+    if (ctx->state == ChipState::STATE_WARMUP)
     {
-        if (xSemaphoreTake(i2cMutex, pdMS_TO_TICKS(50)) != pdTRUE)
+        if (now - ctx->initTs < ctx->warmupMs)
             return false;
 
-        bool ok = bme280ReadAll(s.address, bc);
+        ctx->state = ChipState::STATE_READY;
+    }
 
-        xSemaphoreGive(i2cMutex);
+    if (ctx->state != ChipState::STATE_READY)
+        return false;
 
-        if (!ok) {
-            cc.consecutiveErrors++;
-            cc.errorCount++;
-            if (cc.consecutiveErrors >= 5)
-                cc.state = ChipState::ERROR;
+    // -------- CACHE --------
+    Bme280Cache& c = cache[s.address & 0x07];
+
+    if (!c.valid || now - c.lastReadMs > 250)  // 250ms ventana
+    {
+        if (!bme280ReadAll(s.address, c)) {
+            i2cChipGuardOnError(ctx);
             return false;
         }
 
-        cc.consecutiveErrors = 0;
-        cc.lastReadTs = now;
+        i2cChipGuardOnSuccess(ctx, now);
     }
 
     switch (s.channel)
     {
-        case 0: out = bc.temp; return true;
-        case 1: out = bc.hum;  return true;
-        case 2: out = bc.pres; return true;
+        case 0: out = c.temp; return true;
+        case 1: out = c.hum;  return true;
+        case 2: out = c.pres; return true;
         default: return false;
     }
 }
 
-// ==============================
+
+
+// ============================================================
+// METADATA
+// ============================================================
+
+void bme280GetMetadata(ChipMetadata& meta)
+{
+    static const char* oversampling[] = {
+        "x1",
+        "x2",
+        "x4",
+        "x8"
+    };
+
+    meta.name = "BME280";
+    meta.channelCount = 3;
+
+    meta.opt1.label = "Oversampling";
+    meta.opt1.values = oversampling;
+    meta.opt1.valueCount = 4;
+    meta.opt1.defaultIndex = 1;
+
+    meta.opt2.label = nullptr;
+    meta.opt2.values = nullptr;
+    meta.opt2.valueCount = 0;
+    meta.opt2.defaultIndex = 0;
+}
+
+// ============================================================
 // RESET
-// ==============================
+// ============================================================
+
 void bme280Reset()
 {
-    for (uint8_t i = 0; i < BME280_MAX_CHIPS; i++) {
+    for (int i = 0; i < 8; i++)
         cache[i] = {};
-        ctx[i]   = {};
-    }
+}
+
+bool bme280Detect(uint8_t addr)
+{
+    uint8_t id;
+    if (!i2cRead8(addr, 0xD0, id))
+        return false;
+
+    return (id == 0x60);
 }

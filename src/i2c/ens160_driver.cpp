@@ -1,23 +1,19 @@
-#include "i2c/ens160_driver.h"
-#include <Wire.h>
-#include <freertos/FreeRTOS.h>
-#include <freertos/semphr.h>
+#include "ens160_driver.h"
+#include "i2c/i2c_chip_context.h"
+#include "i2c_chip_guard.h"
+#include "i2c/i2c_bus.h"
+#include <Arduino.h>
 
 // ==============================
-// REGISTROS ENS160
+// REGISTROS
 // ==============================
-#define ENS160_REG_PART_ID     0x00
 #define ENS160_REG_OPMODE     0x10
-#define ENS160_REG_TEMP_IN    0x13
-#define ENS160_REG_RH_IN      0x15
-
 #define ENS160_REG_DATA_AQI   0x21
 #define ENS160_REG_DATA_TVOC  0x22
 #define ENS160_REG_DATA_ECO2  0x24
+#define ENS160_REG_TEMP_IN    0x13
+#define ENS160_REG_RH_IN      0x15
 
-// ==============================
-// MODOS
-// ==============================
 #define ENS160_OPMODE_RESET   0xF0
 #define ENS160_OPMODE_IDLE    0x01
 #define ENS160_OPMODE_STD     0x02
@@ -26,105 +22,56 @@
 // CACHE
 // ==============================
 struct Ens160Cache {
-    bool     valid = false;
-    uint16_t aqi   = 0;
-    uint16_t tvoc  = 0;
-    uint16_t eco2  = 0;
+    bool valid = false;
+    uint16_t aqi = 0;
+    uint16_t tvoc = 0;
+    uint16_t eco2 = 0;
     uint32_t lastReadMs = 0;
 };
 
-static Ens160Cache cache[ENS160_MAX_CHIPS];
-static ChipContext ctx[ENS160_MAX_CHIPS];
+static Ens160Cache cache[8];
 
-// ==============================
-// MUTEX I2C
-// ==============================
-static SemaphoreHandle_t i2cMutex = nullptr;
-
-static void ensureMutex()
-{
-    if (!i2cMutex)
-        i2cMutex = xSemaphoreCreateMutex();
-}
-
-// ==============================
-// LOW LEVEL
-// ==============================
-static bool i2cWrite8(uint8_t addr, uint8_t reg, uint8_t val)
-{
-    Wire.beginTransmission(addr);
-    Wire.write(reg);
-    Wire.write(val);
-    return Wire.endTransmission() == 0;
-}
-
-static bool i2cRead16(uint8_t addr, uint8_t reg, uint16_t& out)
-{
-    Wire.beginTransmission(addr);
-    Wire.write(reg);
-    if (Wire.endTransmission(false) != 0)
-        return false;
-
-    if (Wire.requestFrom(addr, (uint8_t)2) != 2)
-        return false;
-
-    out = Wire.read() | (Wire.read() << 8);
-    return true;
-}
-
-// ==============================
+// ============================================================
 // INIT
-// ==============================
+// ============================================================
+
 bool ens160Init(uint8_t addr, uint8_t options)
 {
-    ensureMutex();
+    ChipContext* ctx = i2cGetChipContext(I2CDevice::ENS160, addr);
+    if (!ctx) return false;
 
-    uint8_t idx = addr & 0x07;
-    ChipContext& c = ctx[idx];
-
-    if (xSemaphoreTake(i2cMutex, pdMS_TO_TICKS(50)) != pdTRUE)
-        return false;
-
-    c.state      = ChipState::INITIALIZING;
-    c.initTs     = millis();
-    c.warmupMs   = 60000;     // ENS160 necesita ~60s reales
-    c.retryMs    = 5000;
-    c.errorCount = 0;
-    c.consecutiveErrors = 0;
+    ctx->state = ChipState::STATE_INITIALIZING;
+    ctx->initTs = millis();
+    ctx->warmupMs = 60000;      // ENS160 necesita ~60s reales
+    ctx->retryMs = 5000;
+    ctx->consecutiveErrors = 0;
 
     // RESET
-    if (!i2cWrite8(addr, ENS160_REG_OPMODE, ENS160_OPMODE_RESET)) {
-        c.state = ChipState::ERROR;
-        xSemaphoreGive(i2cMutex);
+    if (!i2cWrite8(addr, ENS160_REG_OPMODE, ENS160_OPMODE_RESET))
         return false;
-    }
 
-    vTaskDelay(pdMS_TO_TICKS(5));
+    delay(5);
 
-    uint8_t mode =
-        (options & ENS160_OPT_IDLE)
-            ? ENS160_OPMODE_IDLE
-            : ENS160_OPMODE_STD;
+    uint8_t mode = (options == 1)
+        ? ENS160_OPMODE_IDLE
+        : ENS160_OPMODE_STD;
 
-    if (!i2cWrite8(addr, ENS160_REG_OPMODE, mode)) {
-        c.state = ChipState::ERROR;
-        xSemaphoreGive(i2cMutex);
+    if (!i2cWrite8(addr, ENS160_REG_OPMODE, mode))
         return false;
-    }
 
-    c.state = ChipState::WARMUP;
-    xSemaphoreGive(i2cMutex);
+    ctx->state = ChipState::STATE_WARMUP;
     return true;
 }
 
-// ==============================
+// ============================================================
 // READ ALL
-// ==============================
+// ============================================================
+
 static bool ens160ReadAll(uint8_t addr, Ens160Cache& c)
 {
     uint16_t v;
 
-    if (!i2cRead16(addr, ENS160_REG_DATA_AQI, v))  return false;
+    if (!i2cRead16(addr, ENS160_REG_DATA_AQI, v)) return false;
     c.aqi = v;
 
     if (!i2cRead16(addr, ENS160_REG_DATA_TVOC, v)) return false;
@@ -138,127 +85,115 @@ static bool ens160ReadAll(uint8_t addr, Ens160Cache& c)
     return true;
 }
 
-// ==============================
+// ============================================================
 // API PRINCIPAL
-// ==============================
-bool leerSignalENS160(const Signal& s, float& out)
-{
-    ensureMutex();
+// ============================================================
 
-    uint8_t idx = s.address & 0x07;
-    ChipContext& cc = ctx[idx];
-    Ens160Cache& ec = cache[idx];
+bool ens160ReadSignal(const Signal& s, float& out)
+{
+    ChipContext* ctx = i2cGetChipContext(I2CDevice::ENS160, s.address);
+    if (!ctx) return false;
 
     uint32_t now = millis();
 
-    // -----------------------------
-    // SAFE
-    // -----------------------------
-    if (cc.state == ChipState::ERROR) {
-        if (now - cc.lastReadTs > cc.retryMs) {
-            cc.state = ChipState::UNINITIALIZED;
-            cc.consecutiveErrors = 0;
-        }
-        return false;
-    }
-
-    // -----------------------------
-    // INIT
-    // -----------------------------
-    if (cc.state == ChipState::UNINITIALIZED) {
-        if (!ens160Init(s.address, s.options)) {
-            cc.consecutiveErrors++;
-            cc.errorCount++;
-            if (cc.consecutiveErrors >= 5)
-                cc.state = ChipState::ERROR;
-            return false;
-        }
-        return false;
-    }
-
-    // -----------------------------
-    // WARMUP
-    // -----------------------------
-    if (cc.state == ChipState::WARMUP) {
-        if (now - cc.initTs < cc.warmupMs)
-            return false;
-        cc.state = ChipState::READY;
-    }
-
-    if (cc.state != ChipState::READY)
+    // Guard común (ERROR, WARMUP, cooldown, disabled, etc.)
+    if (!i2cChipGuardBeforeRead(ctx, now))
         return false;
 
-    // -----------------------------
-    // CACHE
-    // -----------------------------
-    if (!ec.valid || now - ec.lastReadMs > ENS160_CACHE_MS)
+    // INIT cascada
+    if (ctx->state == ChipState::STATE_UNINITIALIZED)
     {
-        if (xSemaphoreTake(i2cMutex, pdMS_TO_TICKS(50)) != pdTRUE)
+        if (!ens160Init(s.address, s.options))
+        {
+            i2cChipGuardOnError(ctx);
             return false;
+        }
+        return false;
+    }
 
-        bool ok = ens160ReadAll(s.address, ec);
+    // Cache por dirección
+    uint8_t idx = s.address & 0x07;
+    Ens160Cache& c = cache[idx];
 
-        xSemaphoreGive(i2cMutex);
-
-        if (!ok) {
-            cc.consecutiveErrors++;
-            cc.errorCount++;
-            if (cc.consecutiveErrors >= 5)
-                cc.state = ChipState::ERROR;
+    // Lectura real
+    if (!c.valid || (now - c.lastReadMs > ENS160_CACHE_MS))
+    {
+        if (!ens160ReadAll(s.address, c))
+        {
+            i2cChipGuardOnError(ctx);
             return false;
         }
 
-        cc.consecutiveErrors = 0;
-        cc.lastReadTs = now;
+        i2cChipGuardOnSuccess(ctx, now);
     }
 
-    // -----------------------------
-    // CANALES
-    // -----------------------------
-    switch (s.channel) {
-        case 0: out = ec.aqi;  return true;
-        case 1: out = ec.tvoc; return true;
-        case 2: out = ec.eco2; return true;
+    switch (s.channel)
+    {
+        case 0: out = c.aqi;  return true;
+        case 1: out = c.tvoc; return true;
+        case 2: out = c.eco2; return true;
         default: return false;
     }
 }
 
-// ==============================
-// AUTOCOMPENSACIÓN (OPCIONAL)
-// ==============================
+// ============================================================
+// COMPENSACIÓN AMBIENTAL
+// ============================================================
+
 bool ens160SetEnvironmentalData(uint8_t addr, float temp, float hum)
 {
-    ensureMutex();
+    uint16_t rh = (uint16_t)(hum * 64.0f);
+    uint16_t t  = (uint16_t)((temp + 273.15f) * 64.0f);
 
-    uint16_t rh  = (uint16_t)(hum * 64.0f);
-    uint16_t tK  = (uint16_t)((temp + 273.15f) * 64.0f);
-
-    if (xSemaphoreTake(i2cMutex, pdMS_TO_TICKS(50)) != pdTRUE)
+    if (!i2cWrite16(addr, ENS160_REG_RH_IN, rh))
         return false;
 
-    Wire.beginTransmission(addr);
-    Wire.write(ENS160_REG_RH_IN);
-    Wire.write(rh & 0xFF);
-    Wire.write(rh >> 8);
-    bool okH = (Wire.endTransmission() == 0);
+    if (!i2cWrite16(addr, ENS160_REG_TEMP_IN, t))
+        return false;
 
-    Wire.beginTransmission(addr);
-    Wire.write(ENS160_REG_TEMP_IN);
-    Wire.write(tK & 0xFF);
-    Wire.write(tK >> 8);
-    bool okT = (Wire.endTransmission() == 0);
-
-    xSemaphoreGive(i2cMutex);
-    return okH && okT;
+    return true;
 }
 
-// ==============================
+// ============================================================
+// METADATA
+// ============================================================
+
+void ens160GetMetadata(ChipMetadata& meta)
+{
+    static const char* modes[] = {
+        "Standard Mode",
+        "Idle Mode"
+    };
+
+    meta.name = "ENS160 Air Quality";
+    meta.channelCount = 3;
+
+    meta.opt1.label = "Operating Mode";
+    meta.opt1.values = modes;
+    meta.opt1.valueCount = 2;
+    meta.opt1.defaultIndex = 0;
+
+    meta.opt2.label = nullptr;
+    meta.opt2.values = nullptr;
+    meta.opt2.valueCount = 0;
+    meta.opt2.defaultIndex = 0;
+}
+
+// ============================================================
 // RESET
-// ==============================
+// ============================================================
+
 void ens160Reset()
 {
-    for (uint8_t i = 0; i < ENS160_MAX_CHIPS; i++) {
+    for (int i = 0; i < 8; i++)
         cache[i] = {};
-        ctx[i]   = {};
-    }
+}
+
+bool ens160Detect(uint8_t addr)
+{
+    uint16_t id;
+    if (!i2cRead16(addr, 0x00, id))
+        return false;
+
+    return (id == 0x0160);
 }

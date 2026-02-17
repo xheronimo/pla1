@@ -1,29 +1,24 @@
 #pragma once
 
+#include <stdint.h>
 #include "signal/signal_struct.h"
-#include "i2c/i2c_chip_context.h"
+#include "i2c_chip_context.h"
+#include "i2c_chip_registry.h"
+#include "i2c_bus.h"
 
-// ==============================
-// CONFIG
-// ==============================
-#define ENS160_MAX_CHIPS   8
-#define ENS160_CACHE_MS   1000   // 1s
+#define ENS160_CACHE_MS 1000
 
-// ==============================
-// OPCIONES (Signal.options)
-// bit 0 → autocompensación T/RH
-// bit 1 → modo IDLE (en vez de STANDARD)
-// ==============================
-#define ENS160_OPT_AUTOCOMP   0x01
-#define ENS160_OPT_IDLE       0x02
-
-// ==============================
-// CANALES
+// Canales:
 // 0 → AQI
 // 1 → TVOC (ppb)
 // 2 → eCO2 (ppm)
-// ==============================
-bool ens160Init(uint8_t addr, uint8_t options = 0);
-bool leerSignalENS160(const Signal& s, float& out);
-bool ens160SetEnvironmentalData(uint8_t addr, float temp, float hum);
+
+bool ens160Init(uint8_t addr, uint8_t options);
+bool ens160ReadSignal(const Signal& s, float& out);
+void ens160GetMetadata(ChipMetadata& meta);
 void ens160Reset();
+
+// Opcional: compensación ambiental
+bool ens160SetEnvironmentalData(uint8_t addr, float temp, float hum);
+
+bool ens160Detect(uint8_t addr);
