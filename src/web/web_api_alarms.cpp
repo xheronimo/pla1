@@ -22,13 +22,26 @@ void handleApiGetAlarms()
     for (size_t i = 0; i < count; i++)
     {
         const AlarmRule& r = rules[i];
+        AlarmRuntime* rt = alarmRuntimeGet(r.alarmId);
+
+        bool active  = rt ? rt->active  : false;
+        bool acked   = rt ? rt->acked   : false;
+        bool blocked = rt ? rt->blocked : false;
 
         JsonObject o = arr.add<JsonObject>();
-        o["id"]     = r.alarmId;
-        o["active"] = alarmRuntimeIsActive(r.alarmId);
-        o["acked"]  = alarmRuntimeIsAcked(r.alarmId);
-        o["group"]  = alarmGroupToStr(r.group);
-        o["level"]  = alarmSeverityToStr(r.severity);
+        o["id"]      = r.alarmId;
+        o["active"]  = active;
+        o["acked"]   = acked;
+        o["blocked"] = blocked;
+        o["group"]   = alarmGroupToStr(r.group);
+        o["level"]   = alarmSeverityToStr(r.severity);
+
+        if (blocked)
+            o["state"] = "BLOCKED";
+        else if (active)
+            o["state"] = "ACTIVE";
+        else
+            o["state"] = "OK";
     }
 
     String out;
@@ -37,3 +50,7 @@ void handleApiGetAlarms()
 }
 
 
+void registerAlarmsApi()
+{
+    server.on("/api/alarms", HTTP_GET, handleApiGetAlarms);
+}

@@ -2,3 +2,4 @@
 
 
 void handleApiGetAlarms();
+void registerAlarmsApi();
