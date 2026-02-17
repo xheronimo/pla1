@@ -24,3 +24,4 @@ public:
     // Hook al conectar (suscripciones + snapshot)
     static void onConnect();
 };
+void publishBootEvent();

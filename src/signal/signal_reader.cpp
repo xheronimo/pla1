@@ -21,10 +21,6 @@ bool leerSignal(const Signal &s, float &out)
         ok = leerSignalI2C(s, out);
         break;
 
-    case BusType::BUS_PCF:
-        ok = leerSignalPCF_System(s, out);
-        break;
-
     case BusType::BUS_MODBUS:
         ok = leerSignalModbus(s, out);
         break;

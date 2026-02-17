@@ -1,40 +1,49 @@
 #include "signal_read_modbus.h"
-#include "modbus/modbus_manager.h"
 #include "signal/signal_struct.h"
+#include "modbus/modbus_manager.h"
+#include "modbus/modbus_guard.h"
+#include "modbus/modbus_decode.h"
+#include "modbus/modbus_utils.h"
 
-
-
-bool leerSignalModbus(const Signal& s, float& out)
+bool leerSignalModbus(const Signal &s, float &out)
 {
-    uint16_t regValue = 0;
+    uint8_t words = modbusNormalizeWordCount(s);
+    uint16_t buffer[2];
+
     bool ok = false;
 
-    switch (s.modbusType)
+    if (s.modbusType == ModbusRegType::MODBUS_HOLDING)
     {
-        case ModbusRegType::MODBUS_HOLDING:
-            ok = ModbusManager::readHolding(
-                s.address,   // slave
-                s.channel,   // register
-                regValue
-            );
-            break;
-
-        case ModbusRegType::MODBUS_INPUT:
-            ok = ModbusManager::readInput(
-                s.address,
-                s.channel,
-                regValue
-            );
-            break;
-
-        default:
-            return false;
+        ok = ModbusManager::readHoldingRaw(
+            s.address,
+            s.channel,
+            words,
+            buffer);
+    }
+    else if (s.modbusType == ModbusRegType::MODBUS_INPUT)
+    {
+        ok = ModbusManager::readInputRaw(
+            s.address,
+            s.channel,
+            words,
+            buffer);
+    }
+    else
+    {
+        return false;
     }
 
     if (!ok)
         return false;
 
-    out = (float)regValue;
-    return true;
+    if (!modbusDecodeValue(buffer, s, out))
+    {
+        ModbusSlaveContext *ctx = modbusGetContext(s.address);
+        if (ctx)
+        {
+            ctx->configErrors++;
+            modbusCheckConfigFault(ctx);
+        }
+        return false;
+    }
 }
-

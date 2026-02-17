@@ -1,7 +1,7 @@
 #include "mqtt_alarm_ack.h"
 #include "alarm/alarm_runtime.h"
 #include "alarm/alarm_persistence.h"
-
+#include <ArduinoJson.h>
 #include "alarm/alarm_queue.h"
 
 void handleAlarmAck(const char *payload)

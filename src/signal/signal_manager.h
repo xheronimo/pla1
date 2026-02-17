@@ -15,5 +15,9 @@ bool signalManagerGetValueById(uint32_t id, float& outValue);
 bool signalManagerGetErrorById(uint32_t id, bool& outError);
 
 
+bool signalPhysicalExists(const Signal& s, const char* ignoreId);
 
+Signal* signalManagerGetAll(size_t& count);
+size_t signalManagerGetCount();
 
+Signal* signalManagerGetById(const char* id);

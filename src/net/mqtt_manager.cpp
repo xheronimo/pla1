@@ -6,6 +6,8 @@
 #include "mqtt_commands.h"
 #include "mqtt_snapshot.h"
 #include "net/mqtt_topics.h"
+#include "ArduinoJson.h"
+#include "system/boot_reason.h"
 
 // --------------------------------------------------
 // Cliente MQTT
@@ -103,7 +105,9 @@ bool MQTTManager::publish(
 // --------------------------------------------------
 bool MQTTManager::isConnected()
 {
+    
     return mqtt.connected();
+
 }
 
 // --------------------------------------------------
@@ -116,4 +120,31 @@ void MQTTManager::onConnect()
 
     // Enviar snapshot completo de alarmas
     mqttPublishAlarmSnapshot();
+    publishBootEvent();
+}
+
+
+void publishBootEvent()
+{
+    if (!MQTTManager::isConnected())
+        return;
+
+    JsonDocument doc;
+    doc["event"] = "boot";
+    doc["uptime"] = millis();
+    doc["wdtCount"] = g_wdtResetCount;
+
+    if (g_lastResetWdt)
+        doc["reason"] = "watchdog";
+    else if (g_lastResetPower)
+        doc["reason"] = "poweron";
+    else if (g_lastResetSoftware)
+        doc["reason"] = "software";
+    else
+        doc["reason"] = "other";
+
+    String payload;
+    serializeJson(doc, payload);
+
+    MQTTManager::publish("system/boot", payload.c_str(), true);
 }

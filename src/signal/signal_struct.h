@@ -3,13 +3,25 @@
 #include "bus/bus_struct.h"
 #include "i2c/i2c_chip.h"
 
+
 struct Calibration
 {
-    float rawMin;
-    float rawMax;
-    float realMin;
-    float realMax;
-    bool clamp;
+    float rawMin = 0;
+    float rawMax = 0;
+    float realMin = 0;
+    float realMax = 0;
+    float offset = 0;
+
+    bool  clamp = false;
+
+    float measureHysteresis = 0;
+    bool  hasStableValue = false;
+    float lastStableValue = 0;
+
+    float emaAlpha = 0;
+    bool  emaInit = false;
+    float emaValue = 0;
+
 };
 
 enum class ModbusRegType : uint8_t
@@ -32,8 +44,19 @@ enum class ModbusDataType : uint8_t
 enum class ModbusWordOrder : uint8_t
 {
     AB, // normal (reg, reg+1)
-    BA  // swapped
+    BA, // swapped
+    CDAB
 };
+
+enum class SignalQuality : uint8_t
+{
+    GOOD,
+    UNSTABLE,
+    CLAMPED,
+    ERROR
+};
+
+
 
 struct Signal
 {
@@ -45,32 +68,43 @@ struct Signal
     uint8_t address; // I2C / PCF / Modbus slave
     uint8_t channel; // pin / bit / register
     uint8_t wordCount;
-    bool signedValue; // int / uint
-    ModbusDataType dataType;
-    ModbusWordOrder wordOrder;
-    bool writable;   // 👈 CLAVE
-    // 🔽 SOLO PARA MODBUS
+    bool signedValue;
 
-    ModbusRegType modbusType;
+    bool writable;
 
-    I2CDevice chip;      // 👈 clave
+    I2CDevice chip;
+    uint32_t options;
 
-    bool invertido; // SOLO DIGITAL
+    bool systemReserved = false;
+    bool lockedConfig = false;
+
+    bool invertido;
 
     // --- valores ---
-    float raw;   // valor leído (tras debounce / invertido)
-    float prev;  // valor previo (para trigger)
-    float value; // valor calibrado (ANALOG)
+    float raw;
+    float prev;
+    float value;
 
-    Calibration calib; // SOLO ANALOG
-    bool error;
+    Calibration calib;
 
-    // --- debounce (SOLO DIGITAL) ---
-    uint16_t debounceMs;
-    float stableValue;
-    uint32_t lastChangeTs;
-    bool initialized; // 👈 NUEVO
+    bool error = false;
 
-    uint8_t errorCount; // 👈 importante
-    uint32_t lastOkTs;  // 👈 watchdog
+    // --- debounce ---
+    uint16_t debounceMs = 0;
+    float stableValue = 0;
+    uint32_t lastChangeTs = 0;
+    bool initialized = false;
+
+    uint8_t errorCount = 0;
+    uint32_t lastOkTs = 0; // ← SOLO UNA VEZ
+
+    bool valid = false;
+
+    // MODBUS
+    ModbusDataType dataType;
+    ModbusWordOrder wordOrder;
+    ModbusRegType modbusType;
+
+    SignalQuality quality = SignalQuality::GOOD;
+    uint32_t lastUpdateMs ;
 };

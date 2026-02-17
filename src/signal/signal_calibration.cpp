@@ -1,41 +1,113 @@
 #include "signal_calibration.h"
+#include <math.h>
 
 float calibrateValue(
     float raw,
     float rawMin,
     float rawMax,
     float realMin,
-    float realMax
-)
+    float realMax)
 {
     if (rawMax == rawMin)
         return realMin;
 
-    if (raw < rawMin) raw = rawMin;
-    if (raw > rawMax) raw = rawMax;
+    if (raw < rawMin)
+        raw = rawMin;
+    if (raw > rawMax)
+        raw = rawMax;
 
     return realMin +
            (raw - rawMin) * (realMax - realMin) /
-           (rawMax - rawMin);
+               (rawMax - rawMin);
 }
 
-
-static float applyCalibration(float raw, const Calibration& c)
+float applyCalibration(float raw,
+                       Calibration& calib,
+                       bool& stable,
+                       bool& clamped)
 {
-    if (c.rawMax == c.rawMin)
-        return c.realMin;
+    float value = raw;
+    stable = true;
+    clamped = false;
 
-    float val = c.realMin +
-        (raw - c.rawMin) *
-        (c.realMax - c.realMin) /
-        (c.rawMax - c.rawMin);
-
-    if (c.clamp)
+    // ===============================
+    // 1️⃣ Escalado lineal
+    // ===============================
+    if (calib.rawMax != calib.rawMin)
     {
-        if (val < c.realMin) val = c.realMin;
-        if (val > c.realMax) val = c.realMax;
+        float ratio =
+            (raw - calib.rawMin) /
+            (calib.rawMax - calib.rawMin);
+
+        value =
+            calib.realMin +
+            ratio * (calib.realMax - calib.realMin);
     }
 
-    return val;
+    // ===============================
+    // 2️⃣ Offset
+    // ===============================
+    value += calib.offset;
+
+    // ===============================
+    // 3️⃣ Clamp
+    // ===============================
+    if (calib.clamp)
+    {
+        if (value < calib.realMin)
+        {
+            value = calib.realMin;
+            clamped = true;
+        }
+        if (value > calib.realMax)
+        {
+            value = calib.realMax;
+            clamped = true;
+        }
+    }
+
+    // ===============================
+    // 4️⃣ Histéresis de medida
+    // ===============================
+    if (calib.measureHysteresis > 0.0f)
+    {
+        if (!calib.hasStableValue)
+        {
+            calib.lastStableValue = value;
+            calib.hasStableValue = true;
+        }
+        else if (fabs(value - calib.lastStableValue) <
+                 calib.measureHysteresis)
+        {
+            stable = false;
+            return calib.lastStableValue;
+        }
+        else
+        {
+            calib.lastStableValue = value;
+        }
+    }
+
+    // ===============================
+    // 5️⃣ Filtro EMA
+    // ===============================
+    if (calib.emaAlpha > 0.0f)
+    {
+        if (!calib.emaInit)
+        {
+            calib.emaValue = value;
+            calib.emaInit = true;
+        }
+        else
+        {
+            calib.emaValue =
+                calib.emaAlpha * value +
+                (1.0f - calib.emaAlpha) * calib.emaValue;
+        }
+
+        value = calib.emaValue;
+    }
+
+    return value;
 }
 
