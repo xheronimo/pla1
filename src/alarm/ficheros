@@ -1,0 +1,47 @@
+ El volumen de la unidad D es d
+ El n£mero de serie del volumen es: 669B-C6CC
+
+ Directorio de d:\usuarios\javi\descargas\PlatformIO\Projects\placa\src\alarm
+
+13/03/2026  09:27    <DIR>          .
+13/03/2026  09:27    <DIR>          ..
+20/02/2026  02:09               302 alarm_ack.cpp
+20/02/2026  02:09                67 alarm_ack.h
+20/02/2026  02:09               814 alarm_actions.cpp
+20/02/2026  02:09               140 alarm_actions.h
+20/02/2026  02:09               694 alarm_config.cpp
+20/02/2026  02:09               166 alarm_config.h
+20/02/2026  02:09               116 alarm_defs.h
+20/02/2026  02:09               152 alarm_destinations.cpp
+20/02/2026  02:09               577 alarm_destinations.h
+20/02/2026  02:09             1.404 alarm_destinations_serializer.cpp
+20/02/2026  02:09               150 alarm_destinations_serializer.h
+13/03/2026  08:27             4.529 alarm_evaluator.cpp
+13/03/2026  08:28               930 alarm_evaluator.h
+13/03/2026  08:29               662 alarm_expr.h
+20/02/2026  02:09             2.106 alarm_expr_builder.cpp
+20/02/2026  02:09               164 alarm_expr_builder.h
+13/03/2026  08:40             4.509 alarm_json_loader.cpp
+13/03/2026  08:41               874 alarm_json_loader.h
+13/03/2026  09:26             4.996 alarm_manager.cpp
+13/03/2026  09:26             1.562 alarm_manager.h
+20/02/2026  02:09               795 alarm_persistence.cpp
+20/02/2026  02:09               137 alarm_persistence.h
+20/02/2026  02:09               255 alarm_policy.h
+13/03/2026  09:14             1.073 alarm_queue.cpp
+13/03/2026  09:14               509 alarm_queue.h
+20/02/2026  02:09               891 alarm_registry.cpp
+20/02/2026  02:09               425 alarm_registry.h
+20/02/2026  02:09             1.977 alarm_router.cpp
+20/02/2026  02:09               461 alarm_router.h
+20/02/2026  02:09               111 alarm_rule_runtime.h
+20/02/2026  02:09             2.796 alarm_runtime.cpp
+20/02/2026  02:09               868 alarm_runtime.h
+20/02/2026  02:09               654 alarm_state.cpp
+20/02/2026  02:09               203 alarm_state.h
+13/03/2026  08:22             2.158 alarm_struct.h
+20/02/2026  02:09             2.089 alarm_utils.cpp
+20/02/2026  02:09               386 alarm_utils.h
+13/03/2026  09:27                 0 ficheros
+              38 archivos         40.702 bytes
+               2 dirs  1.294.374.084.608 bytes libres
